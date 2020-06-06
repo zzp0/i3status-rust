@@ -39,19 +39,19 @@ impl fmt::Display for State {
             State::Stopped => write!(f, "\u{25a0} 0:00"),
             State::Started(_) => write!(
                 f,
-                "\u{f04b} {}:{:02}",
+                "\u{25a1} {}:{:02}",
                 self.elapsed().as_secs() / 60,
                 self.elapsed().as_secs() % 60
             ),
             State::OnBreak(_) => write!(
                 f,
-                "\u{2615} {}:{:02}",
+                "\u{25aa} {}:{:02}",
                 self.elapsed().as_secs() / 60,
                 self.elapsed().as_secs() % 60
             ),
             State::Paused(duration) => write!(
                 f,
-                "\u{f04c} {}:{:02}",
+                "\u{25a3} {}:{:02}",
                 duration.as_secs() / 60,
                 duration.as_secs() % 60
             ),
