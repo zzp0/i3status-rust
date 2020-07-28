@@ -7,6 +7,8 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::Sender;
+use lazy_static::lazy_static;
+use regex::bytes::Regex;
 use serde_derive::Deserialize;
 use uuid::Uuid;
 
@@ -18,10 +20,25 @@ use crate::errors::*;
 use crate::input::{I3BarEvent, MouseButton};
 use crate::scheduler::Task;
 use crate::subprocess::spawn_child_async;
-use crate::util::{escape_pango_text, format_percent_bar, format_speed};
+use crate::util::{
+    escape_pango_text, format_percent_bar, format_speed, format_vec_to_bar_graph, FormatTemplate,
+};
 use crate::widget::I3BarWidget;
 use crate::widgets::button::ButtonWidget;
-use crate::widgets::graph::GraphWidget;
+use std::ffi::OsStr;
+use std::io::ErrorKind;
+
+lazy_static! {
+    static ref DEFAULT_DEV_REGEX: Regex = Regex::new("default.*dev (\\w*).*").unwrap();
+    static ref WHITESPACE_REGEX: Regex = Regex::new("\\s+").unwrap();
+    static ref ETHTOOL_SPEED_REGEX: Regex = Regex::new("Speed: (\\d+\\w\\w/s)").unwrap();
+    static ref IW_SSID_REGEX: Regex = Regex::new("SSID: ([[:alnum:]]+)").unwrap();
+    static ref WPA_SSID_REGEX: Regex = Regex::new("ssid=([[:alnum:]]+)").unwrap();
+    static ref IWCTL_SSID_REGEX: Regex = Regex::new("Connected network ([[:alnum:]]+)").unwrap();
+    static ref IW_BITRATE_REGEX: Regex =
+        Regex::new("tx bitrate: (\\d+(?:\\.?\\d+) [[:alpha:]]+/s)").unwrap();
+    static ref IW_SIGNAL_REGEX: Regex = Regex::new("signal: (-?\\d+) dBm").unwrap();
+}
 
 pub struct NetworkDevice {
     device: String,
@@ -75,17 +92,17 @@ impl NetworkDevice {
     /// and will change when the status of devices change.
     pub fn default_device() -> Option<String> {
         String::from_utf8(
-            Command::new("sh")
-                .args(&[
-                    "-c",
-                    "ip route show default|head -n1|sed -n 's/^default.*dev \\(\\w*\\).*/\\1/p'",
-                ])
+            Command::new("ip")
+                .args(&["route", "show", "default"])
                 .output()
                 .ok()
-                .map(|o| {
-                    let mut v = o.stdout;
-                    v.pop(); // remove newline
-                    v
+                .and_then(|o| {
+                    let mut captures = DEFAULT_DEV_REGEX.captures_iter(&o.stdout);
+                    if let Some(cap) = captures.next() {
+                        cap.get(1).map(|x| x.as_bytes().to_vec())
+                    } else {
+                        None
+                    }
                 })?,
         )
         .ok()
@@ -147,8 +164,7 @@ impl NetworkDevice {
         self.tun || self.wg || self.ppp
     }
 
-    /// Queries the wireless SSID of this device (using `iw`), if it is
-    /// connected to one.
+    /// Queries the wireless SSID of this device, if it is connected to one.
     pub fn ssid(&self) -> Result<Option<String>> {
         let up = self.is_up()?;
         if !self.wireless || !up {
@@ -157,65 +173,8 @@ impl NetworkDevice {
                 "SSIDs are only available for connected wireless devices.".to_string(),
             ));
         }
-        let mut iw_output = Command::new("sh")
-            .args(&[
-                "-c",
-                &format!(
-                    "iw dev {} link | sed -n 's/^\\s\\+SSID: \\(.*\\)/\\1/p'",
-                    self.device
-                ),
-            ])
-            .output()
-            .block_error("net", "Failed to execute SSID query using iw.")?
-            .stdout;
 
-        if iw_output.is_empty() {
-            iw_output = Command::new("sh")
-                .args(&[
-                    "-c",
-                    &format!(
-                        "wpa_cli status -i{} | sed -n 's/^ssid=\\(.*\\)/\\1/p'",
-                        self.device
-                    ),
-                ])
-                .output()
-                .block_error("net", "Failed to execute SSID query using wpa_cli.")?
-                .stdout;
-        }
-
-        if iw_output.is_empty() {
-            iw_output = Command::new("sh")
-                .args(&[
-                    "-c",
-                    &format!("nmcli -g general.connection device show {}", &self.device),
-                ])
-                .output()
-                .block_error("net", "Failed to execute SSID query using nmcli.")?
-                .stdout;
-        }
-
-        if iw_output.is_empty() {
-            iw_output = Command::new("sh")
-                .args(&[
-                    "-c",
-                    &format!(
-                        "iwctl station {} show | sed -n 's/^\\s\\+Connected network\\s\\(.*\\)\\s*/\\1/p'",
-                        self.device
-                    ),
-                ])
-                .output()
-                .block_error("net", "Failed to execute SSID query using iwctl.")?
-                .stdout;
-        }
-
-        if iw_output.is_empty() {
-            Ok(None)
-        } else {
-            iw_output.pop(); // Remove trailing newline.
-            String::from_utf8(iw_output)
-                .block_error("net", "Non-UTF8 SSID.")
-                .map(Some)
-        }
+        get_ssid(self)
     }
 
     fn absolute_signal_strength(&self) -> Result<Option<i32>> {
@@ -226,29 +185,27 @@ impl NetworkDevice {
                 "Signal strength is only available for connected wireless devices.".to_string(),
             ));
         }
-        let mut iw_output = Command::new("sh")
-            .args(&[
-                "-c",
-                &format!(
-                    "iw dev {} link | sed -n 's/^\\s\\+signal: \\(.*\\) dBm/\\1/p'",
-                    self.device
-                ),
-            ])
+
+        let iw_output = Command::new("iw")
+            .args(&["dev", &self.device, "link"])
             .output()
             .block_error("net", "Failed to execute signal strength query.")?
             .stdout;
-        if iw_output.is_empty() {
-            Ok(None)
-        } else {
-            iw_output.pop(); // Remove trailing newline.
-            String::from_utf8(iw_output)
-                .block_error("net", "Non-UTF8 signal strength.")
-                .and_then(|as_str| {
-                    as_str
-                        .parse::<i32>()
+
+        if let Some(raw) = IW_SIGNAL_REGEX
+            .captures_iter(&iw_output)
+            .next()
+            .and_then(|x| x.get(1))
+        {
+            String::from_utf8(raw.as_bytes().to_vec())
+                .block_error("net", "Non-UTF8 signal strength")
+                .and_then(|s| {
+                    s.parse::<i32>()
                         .block_error("net", "Non numerical signal strength.")
                 })
                 .map(Some)
+        } else {
+            Ok(None)
         }
     }
 
@@ -281,13 +238,15 @@ impl NetworkDevice {
         if !self.is_up()? {
             return Ok(None);
         }
-        let mut ip_output = Command::new("sh")
+        let ip_output = Command::new("ip")
             .args(&[
-                "-c",
-                &format!(
-                    "ip -oneline -family inet address show {} | sed -rn -e \"s/.*inet ([\\.0-9/]+).*/\\1/; G; s/\\n/ /;h\" -e \"$ P;\"",
-                    self.device
-                ),
+                "-oneline",
+                "-brief",
+                "-family",
+                "inet",
+                "address",
+                "show",
+                &self.device,
             ])
             .output()
             .block_error("net", "Failed to execute IP address query.")?
@@ -295,13 +254,14 @@ impl NetworkDevice {
 
         if ip_output.is_empty() {
             Ok(None)
-        } else {
-            ip_output.pop(); // Remove trailing newline.
-            let ip = String::from_utf8(ip_output)
+        } else if let Some(ip_bytes) = WHITESPACE_REGEX.splitn(&ip_output, 3).nth(2) {
+            let ip = String::from_utf8(ip_bytes.to_vec())
                 .block_error("net", "Non-UTF8 IP address.")?
                 .trim()
                 .to_string();
             Ok(Some(ip))
+        } else {
+            Ok(None)
         }
     }
 
@@ -311,13 +271,15 @@ impl NetworkDevice {
             return Ok(None);
         }
 
-        let mut ip_output = Command::new("sh")
+        let ip_output = Command::new("ip")
             .args(&[
-                "-c",
-                &format!(
-                    "ip -oneline -family inet6 address show {} | sed -e 's/^.*inet6 \\([^ ]\\+\\).*/\\1/'",
-                    self.device
-                ),
+                "-oneline",
+                "-brief",
+                "-family",
+                "inet6",
+                "address",
+                "show",
+                &self.device,
             ])
             .output()
             .block_error("net", "Failed to execute IPv6 address query.")?
@@ -325,17 +287,18 @@ impl NetworkDevice {
 
         if ip_output.is_empty() {
             Ok(None)
-        } else {
-            ip_output.pop(); // Remove trailing newline.
-            let ip = String::from_utf8(ip_output)
+        } else if let Some(ip_bytes) = WHITESPACE_REGEX.splitn(&ip_output, 3).nth(2) {
+            let ip = String::from_utf8(ip_bytes.to_vec())
                 .block_error("net", "Non-UTF8 IP address.")?
                 .trim()
                 .to_string();
             Ok(Some(ip))
+        } else {
+            Ok(None)
         }
     }
 
-    /// Queries the bitrate of this device (using `iwlist`)
+    /// Queries the bitrate of this device
     pub fn bitrate(&self) -> Result<Option<String>> {
         let up = self.is_up()?;
         if !up {
@@ -344,47 +307,60 @@ impl NetworkDevice {
                 "Bitrate is only available for connected devices.".to_string(),
             ));
         }
-        let command = if self.wireless {
-            format!(
-                "iw dev {} link | awk '/tx bitrate/ {{print $3\" \"$4}}'",
-                self.device
-            )
-        } else {
-            format!(
-                "ethtool {} 2>/dev/null | awk '/Speed:/ {{print $2}}'",
-                self.device
-            )
-        };
-        let mut bitrate_output = Command::new("sh")
-            .args(&["-c", &command])
-            .output()
-            .block_error("net", "Failed to execute bitrate query.")?
-            .stdout;
+        if self.wireless {
+            let bitrate_output = Command::new("iw")
+                .args(&["dev", &self.device, "link"])
+                .output()
+                .block_error("net", "Failed to execute bitrate query with iw.")?
+                .stdout;
 
-        if bitrate_output.is_empty() {
-            Ok(None)
+            if let Some(rate) = IW_BITRATE_REGEX
+                .captures_iter(&bitrate_output)
+                .next()
+                .and_then(|x| x.get(1))
+            {
+                String::from_utf8(rate.as_bytes().to_vec())
+                    .block_error("net", "Non-UTF8 bitrate")
+                    .map(Some)
+            } else {
+                Ok(None)
+            }
         } else {
-            bitrate_output.pop(); // Remove trailing newline.
-            String::from_utf8(bitrate_output)
-                .block_error("net", "Non-UTF8 bitrate.")
-                .map(Some)
+            let output = Command::new("ethtool")
+                .arg(&self.device)
+                .output()
+                .block_error("net", "Failed to execute bitrate query with ethtool")?
+                .stdout;
+            if let Some(rate) = ETHTOOL_SPEED_REGEX.captures_iter(&output).next() {
+                let rate = rate
+                    .get(1)
+                    .block_error("net", "Invalid ethtool output: no speed")?;
+                String::from_utf8(rate.as_bytes().to_vec())
+                    .block_error("net", "Non-UTF8 bitrate")
+                    .map(Some)
+            } else {
+                Ok(None)
+            }
         }
     }
 }
 
 pub struct Net {
+    format: FormatTemplate,
+    output: ButtonWidget,
+    config: Config,
     network: ButtonWidget,
-    ssid: Option<ButtonWidget>,
+    ssid: Option<String>,
     max_ssid_width: usize,
-    signal_strength: Option<ButtonWidget>,
-    signal_strength_bar: bool,
-    ip_addr: Option<ButtonWidget>,
-    ipv6_addr: Option<ButtonWidget>,
-    bitrate: Option<ButtonWidget>,
-    output_tx: Option<ButtonWidget>,
-    graph_tx: Option<GraphWidget>,
-    output_rx: Option<ButtonWidget>,
-    graph_rx: Option<GraphWidget>,
+    signal_strength: Option<String>,
+    signal_strength_bar: Option<String>,
+    ip_addr: Option<String>,
+    ipv6_addr: Option<String>,
+    bitrate: Option<String>,
+    output_tx: Option<String>,
+    graph_tx: Option<String>,
+    output_rx: Option<String>,
+    graph_rx: Option<String>,
     id: String,
     update_interval: Duration,
     device: NetworkDevice,
@@ -433,6 +409,9 @@ pub struct NetConfig {
         deserialize_with = "deserialize_duration"
     )]
     pub interval: Duration,
+
+    #[serde(default = "NetConfig::default_format")]
+    pub format: String,
 
     /// Which interface in /sys/class/net/ to read from.
     #[serde(default = "NetConfig::default_device")]
@@ -512,6 +491,10 @@ pub struct NetConfig {
 impl NetConfig {
     fn default_interval() -> Duration {
         Duration::from_secs(1)
+    }
+
+    fn default_format() -> String {
+        "{speed_up} {speed_down}".to_owned()
     }
 
     fn default_device() -> String {
@@ -608,13 +591,35 @@ impl ConfigBlock for Net {
         let wireless = device.is_wireless();
         let vpn = device.is_vpn();
         let id = Uuid::new_v4().to_simple().to_string();
+
+        let (_, net_config) = config
+            .blocks
+            .iter()
+            .find(|(block_name, _)| block_name == "net")
+            .internal_error("net", "unexpected")?;
+
+        let format = if net_config.get("format").is_some() {
+            // if "format" option is present it will be preferred
+            block_config.format
+        } else if let Some(format) = old_format(&net_config) {
+            // Only choose those deprecated options which are true
+            format
+        } else {
+            // Default format
+            block_config.format
+        };
+
         Ok(Net {
             id: id.clone(),
             update_interval: block_config.interval,
+            format: FormatTemplate::from_string(&format)
+                .block_error("net", "Invalid format specified")?,
+            output: ButtonWidget::new(config.clone(), "").with_text(""),
+            config: config.clone(),
             use_bits: block_config.use_bits,
             speed_min_unit: block_config.speed_min_unit,
             speed_digits: block_config.speed_digits,
-            network: ButtonWidget::new(config.clone(), &id).with_icon(if wireless {
+            network: ButtonWidget::new(config, &id).with_icon(if wireless {
                 "net_wireless"
             } else if vpn {
                 "net_vpn"
@@ -623,57 +628,46 @@ impl ConfigBlock for Net {
             }),
             // Might want to signal an error if the user wants the SSID of a
             // wired connection instead.
-            ssid: if block_config.ssid && wireless {
-                Some(ButtonWidget::new(config.clone(), &id).with_text(" "))
+            ssid: if wireless && format.contains("{ssid}") {
+                Some(" ".to_string())
             } else {
                 None
             },
             max_ssid_width: block_config.max_ssid_width,
-            signal_strength: if block_config.signal_strength && wireless {
-                Some(ButtonWidget::new(config.clone(), &id))
+            signal_strength: if wireless && format.contains("{signal_strength}") {
+                Some(0.to_string())
             } else {
                 None
             },
-            signal_strength_bar: block_config.signal_strength_bar,
-            bitrate: if block_config.bitrate {
-                Some(ButtonWidget::new(config.clone(), &id))
+            signal_strength_bar: if wireless && format.contains("{signal_strength_bar}") {
+                Some("".to_string())
             } else {
                 None
             },
-            ip_addr: if block_config.ip {
-                Some(ButtonWidget::new(config.clone(), &id))
+            // TODO: a better way to deal with this?
+            bitrate: if format.contains("{bitrate}") {
+                Some("".to_string())
             } else {
                 None
             },
-            ipv6_addr: if block_config.ipv6 {
-                Some(ButtonWidget::new(config.clone(), &id))
+            ip_addr: if format.contains("{ip}") {
+                Some("".to_string())
             } else {
                 None
             },
-            output_tx: if block_config.speed_up {
-                Some(ButtonWidget::new(config.clone(), &id).with_icon("net_up"))
+            ipv6_addr: if format.contains("{ipv6}") {
+                Some("".to_string())
             } else {
                 None
             },
-            output_rx: if block_config.speed_down {
-                Some(ButtonWidget::new(config.clone(), &id).with_icon("net_down"))
-            } else {
-                None
-            },
-            graph_tx: if block_config.graph_up {
-                Some(GraphWidget::new(config.clone()))
-            } else {
-                None
-            },
-            graph_rx: if block_config.graph_down {
-                Some(GraphWidget::new(config))
-            } else {
-                None
-            },
+            output_tx: Some("".to_string()),
+            output_rx: Some("".to_string()),
+            graph_tx: Some("".to_string()),
+            graph_rx: Some("".to_string()),
             device,
             auto_device: block_config.auto_device,
-            rx_buff: vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-            tx_buff: vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            rx_buff: vec![0; 10],
+            tx_buff: vec![0; 10],
             rx_bytes: init_rx_bytes,
             tx_bytes: init_tx_bytes,
             active: true,
@@ -683,6 +677,41 @@ impl ConfigBlock for Net {
             on_click: block_config.on_click,
         })
     }
+}
+
+fn old_format(net_config: &toml::Value) -> Option<String> {
+    // List of decprecated options
+    let mut old_options = vec![
+        ("ssid", false),
+        ("signal_strength", false),
+        ("signal_strength_bar", false),
+        ("bitrate", false),
+        ("ip", false),
+        ("ipv6", false),
+        ("speed_up", true),
+        ("speed_down", true),
+        ("graph_up", false),
+        ("graph_down", false),
+    ];
+
+    let mut use_old_format = false;
+    for (key, value) in old_options.iter_mut() {
+        if let Some(toml::Value::Boolean(enabled)) = net_config.get(&*key) {
+            use_old_format = true;
+            *value = *enabled;
+        }
+    }
+    if !use_old_format {
+        return None;
+    }
+
+    let result = old_options
+        .into_iter()
+        .filter(|x| x.1)
+        .map(|x| format!("{{{}}}", x.0))
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some(result)
 }
 
 fn read_file(path: &Path) -> Result<String> {
@@ -716,53 +745,57 @@ impl Net {
     }
 
     fn update_bitrate(&mut self) -> Result<()> {
-        if let Some(ref mut bitrate_widget) = self.bitrate {
+        if let Some(ref mut bitrate_string) = self.bitrate {
             let bitrate = self.device.bitrate()?;
             if let Some(b) = bitrate {
-                bitrate_widget.set_text(b);
+                *bitrate_string = b;
             }
         }
         Ok(())
     }
 
     fn update_ssid(&mut self) -> Result<()> {
-        if let Some(ref mut ssid_widget) = self.ssid {
+        if let Some(ref mut ssid_string) = self.ssid {
             let ssid = self.device.ssid()?;
             if let Some(s) = ssid {
                 let mut truncated = s;
                 truncated.truncate(self.max_ssid_width);
                 // SSID names can contain chars that need escaping
-                ssid_widget.set_text(escape_pango_text(truncated));
+                *ssid_string = escape_pango_text(truncated);
             }
         }
         Ok(())
     }
 
     fn update_signal_strength(&mut self) -> Result<()> {
-        if let Some(ref mut signal_strength_widget) = self.signal_strength {
+        if self.signal_strength.is_some() || self.signal_strength_bar.is_some() {
             let value = self.device.relative_signal_strength()?;
-            if let Some(v) = value {
-                signal_strength_widget.set_text(if self.signal_strength_bar {
-                    format_percent_bar(v as f32)
-                } else {
-                    format!("{}%", v)
-                });
+            if let Some(ref mut signal_strength_string) = self.signal_strength {
+                if let Some(v) = value {
+                    *signal_strength_string = format!("{}%", v);
+                };
+            }
+
+            if let Some(ref mut signal_strength_bar_string) = self.signal_strength_bar {
+                if let Some(v) = value {
+                    *signal_strength_bar_string = format_percent_bar(v as f32);
+                };
             }
         }
         Ok(())
     }
 
     fn update_ip_addr(&mut self) -> Result<()> {
-        if let Some(ref mut ip_addr_widget) = self.ip_addr {
+        if let Some(ref mut ip_addr_string) = self.ip_addr {
             let ip_addr = self.device.ip_addr()?;
             if let Some(ip) = ip_addr {
-                ip_addr_widget.set_text(ip);
+                *ip_addr_string = ip;
             }
         }
-        if let Some(ref mut ipv6_addr_widget) = self.ipv6_addr {
+        if let Some(ref mut ipv6_addr_string) = self.ipv6_addr {
             let ipv6_addr = self.device.ipv6_addr()?;
             if let Some(ip) = ipv6_addr {
-                ipv6_addr_widget.set_text(ip);
+                *ipv6_addr_string = ip;
             }
         }
         Ok(())
@@ -771,26 +804,26 @@ impl Net {
     fn update_tx_rx(&mut self) -> Result<()> {
         // TODO: consider using `as_nanos`
         let update_interval = (self.update_interval.as_secs() as f64)
-        // Update the throughput/graph widgets if they are enabled
+            // Update the throughput/graph widgets if they are enabled
             + (self.update_interval.subsec_nanos() as f64 / 1_000_000_000.0);
         if self.output_tx.is_some() || self.graph_tx.is_some() {
             let current_tx = self.device.tx_bytes()?;
             let tx_bytes = ((current_tx - self.tx_bytes) as f64 / update_interval) as u64;
             self.tx_bytes = current_tx;
 
-            if let Some(ref mut tx_widget) = self.output_tx {
-                tx_widget.set_text(format_speed(
+            if let Some(ref mut tx) = self.output_tx {
+                *tx = format_speed(
                     tx_bytes,
                     self.speed_digits,
                     &self.speed_min_unit.to_string(),
                     self.use_bits,
-                ));
+                );
             };
 
-            if let Some(ref mut graph_tx_widget) = self.graph_tx {
+            if let Some(ref mut graph_tx) = self.graph_tx {
                 self.tx_buff.remove(0);
                 self.tx_buff.push(tx_bytes);
-                graph_tx_widget.set_values(&self.tx_buff, None, None);
+                *graph_tx = format_vec_to_bar_graph(&self.tx_buff, None, None);
             }
         }
         if self.output_rx.is_some() || self.graph_rx.is_some() {
@@ -798,19 +831,19 @@ impl Net {
             let rx_bytes = ((current_rx - self.rx_bytes) as f64 / update_interval) as u64;
             self.rx_bytes = current_rx;
 
-            if let Some(ref mut rx_widget) = self.output_rx {
-                rx_widget.set_text(format_speed(
+            if let Some(ref mut rx) = self.output_rx {
+                *rx = format_speed(
                     rx_bytes,
                     self.speed_digits,
                     &self.speed_min_unit.to_string(),
                     self.use_bits,
-                ));
+                );
             };
 
-            if let Some(ref mut graph_rx_widget) = self.graph_rx {
+            if let Some(ref mut graph_rx) = self.graph_rx {
                 self.rx_buff.remove(0);
                 self.rx_buff.push(rx_bytes);
-                graph_rx_widget.set_values(&self.rx_buff, None, None);
+                *graph_rx = format_vec_to_bar_graph(&self.rx_buff, None, None);
             }
         }
         Ok(())
@@ -827,11 +860,11 @@ impl Block for Net {
         if !exists || !is_up {
             self.active = false;
             self.network.set_text(" ×".to_string());
-            if let Some(ref mut tx_widget) = self.output_tx {
-                tx_widget.set_text("×".to_string());
+            if let Some(ref mut tx) = self.output_tx {
+                *tx = "×".to_string();
             };
-            if let Some(ref mut rx_widget) = self.output_rx {
-                rx_widget.set_text("×".to_string());
+            if let Some(ref mut rx) = self.output_rx {
+                *rx = "×".to_string();
             };
 
             return Ok(Some(self.update_interval.into()));
@@ -854,41 +887,48 @@ impl Block for Net {
 
         self.update_tx_rx()?;
 
+        let empty_string = "".to_string();
+        let s_up = format!(
+            "{} {}",
+            self.config
+                .icons
+                .get("net_up")
+                .cloned()
+                .unwrap_or_else(|| "".to_string()),
+            self.output_tx.as_ref().unwrap_or(&empty_string)
+        );
+        let s_dn = format!(
+            "{} {}",
+            self.config
+                .icons
+                .get("net_down")
+                .cloned()
+                .unwrap_or_else(|| "".to_string()),
+            self.output_rx.as_ref().unwrap_or(&empty_string)
+        );
+
+        let values = map!(
+            "{ssid}" => self.ssid.as_ref().unwrap_or(&empty_string),
+            "{signal_strength}" => self.signal_strength.as_ref().unwrap_or(&empty_string),
+            "{signal_strength_bar}" => self.signal_strength_bar.as_ref().unwrap_or(&empty_string),
+            "{bitrate}" =>  self.bitrate.as_ref().unwrap_or(&empty_string),
+            "{ip}" =>  self.ip_addr.as_ref().unwrap_or(&empty_string),
+            "{ipv6}" =>  self.ipv6_addr.as_ref().unwrap_or(&empty_string),
+            "{speed_up}" =>  &s_up,
+            "{speed_down}" => &s_dn,
+            "{graph_up}" =>  self.graph_tx.as_ref().unwrap_or(&empty_string),
+            "{graph_down}" =>  self.graph_rx.as_ref().unwrap_or(&empty_string)
+        );
+
+        self.output
+            .set_text(self.format.render_static_str(&values)?);
+
         Ok(Some(self.update_interval.into()))
     }
 
     fn view(&self) -> Vec<&dyn I3BarWidget> {
         if self.active {
-            let mut widgets: Vec<&dyn I3BarWidget> = Vec::with_capacity(8);
-            widgets.push(&self.network);
-            if let Some(ref ssid_widget) = self.ssid {
-                widgets.push(ssid_widget);
-            };
-            if let Some(ref signal_strength_widget) = self.signal_strength {
-                widgets.push(signal_strength_widget);
-            };
-            if let Some(ref bitrate_widget) = self.bitrate {
-                widgets.push(bitrate_widget);
-            }
-            if let Some(ref ip_addr_widget) = self.ip_addr {
-                widgets.push(ip_addr_widget);
-            };
-            if let Some(ref ipv6_addr_widget) = self.ipv6_addr {
-                widgets.push(ipv6_addr_widget);
-            };
-            if let Some(ref tx_widget) = self.output_tx {
-                widgets.push(tx_widget);
-            };
-            if let Some(ref graph_tx_widget) = self.graph_tx {
-                widgets.push(graph_tx_widget);
-            };
-            if let Some(ref rx_widget) = self.output_rx {
-                widgets.push(rx_widget);
-            };
-            if let Some(ref graph_rx_widget) = self.graph_rx {
-                widgets.push(graph_rx_widget);
-            }
-            widgets
+            vec![&self.network, &self.output]
         } else if !self.hide_inactive || !self.hide_missing {
             vec![&self.network]
         } else {
@@ -913,5 +953,155 @@ impl Block for Net {
 
     fn id(&self) -> &str {
         &self.id
+    }
+}
+
+fn get_ssid(dev: &NetworkDevice) -> Result<Option<String>> {
+    if let Some(res) = get_iw_ssid(dev)? {
+        return Ok(Some(res));
+    }
+
+    if let Some(res) = get_wpa_ssid(dev)? {
+        return Ok(Some(res));
+    }
+
+    if let Some(res) = get_nmcli_ssid(dev)? {
+        return Ok(Some(res));
+    }
+
+    if let Some(res) = get_iwctl_ssid(dev)? {
+        return Ok(Some(res));
+    }
+
+    Ok(None)
+}
+
+#[inline]
+/// Attempt to get the SSID the given device is connected to from iw.
+/// Returns Err if:
+///     - `iw` is not a valid command
+///     - failed to spawn an `iw` command
+///     - `iw` failed to produce a valid UTF-8 SSID
+/// Returns Ok(None) if `iw` failed to produce a SSID.
+fn get_iw_ssid(dev: &NetworkDevice) -> Result<Option<String>> {
+    let raw = exec_ssid_cmd("iw", &["dev", &dev.device, "link"])?;
+
+    if raw.is_none() {
+        return Ok(None);
+    }
+
+    let raw = raw.unwrap();
+    let result = raw
+        .stdout
+        .split(|c| *c == b'\n')
+        .filter_map(|x| IW_SSID_REGEX.find(x))
+        .next();
+
+    maybe_ssid_convert(result.map(|x| x.as_bytes()))
+}
+
+#[inline]
+/// Attempt to get the SSID the given device is connected to from wpa_cli.
+/// Returns Err if:
+///     - `wpa_cli` is not a valid command
+///     - failed to spawn a `wpa_cli` command
+///     - `wpa_cli` failed to produce a valid UTF-8 SSID
+/// Returns Ok(None) if `wpa_cli` failed to produce a SSID.
+fn get_wpa_ssid(dev: &NetworkDevice) -> Result<Option<String>> {
+    let raw = exec_ssid_cmd("wpa_cli", &["status", "-i", &dev.device])?;
+
+    if raw.is_none() {
+        return Ok(None);
+    }
+
+    let raw = raw.unwrap();
+    let result = raw
+        .stdout
+        .split(|c| *c == b'\n')
+        .filter_map(|x| WPA_SSID_REGEX.find(x))
+        .next();
+
+    maybe_ssid_convert(result.map(|x| x.as_bytes()))
+}
+
+#[inline]
+/// Attempt to get the SSID the given device is connected to from nmcli.
+/// Returns Err if:
+///     - `nmcli` is not a valid command
+///     - failed to spawn a `nmcli` command
+///     - `nmcli` failed to produce a valid UTF-8 SSID
+/// Returns Ok(None) if `nmcli` failed to produce a SSID.
+fn get_nmcli_ssid(dev: &NetworkDevice) -> Result<Option<String>> {
+    let raw = exec_ssid_cmd(
+        "nmcli",
+        &["-g", "general.connection", "device", "show", &dev.device],
+    )?;
+
+    if raw.is_none() {
+        return Ok(None);
+    }
+
+    let raw = raw.unwrap();
+    let result = raw.stdout.split(|c| *c == b'\n').next();
+
+    maybe_ssid_convert(result)
+}
+
+#[inline]
+/// Attempt to get the SSID the given device is connected to from iwctl.
+/// Returns Err if
+///     - `iwctl` is not a valid command
+///     - failed to spawn a `iwctl` command
+///     - `iwctl` failed to produce a valid UTF-8 SSID
+/// Returns Ok(None) if `iwctl` failed to produce a SSID.
+fn get_iwctl_ssid(dev: &NetworkDevice) -> Result<Option<String>> {
+    let raw = exec_ssid_cmd("iwctl", &["station", "station", &dev.device, "show"])?;
+
+    if raw.is_none() {
+        return Ok(None);
+    }
+
+    let raw = raw.unwrap();
+    let result = raw
+        .stdout
+        .split(|c| *c == b'\n')
+        .filter_map(|x| IWCTL_SSID_REGEX.find(x))
+        .next();
+
+    maybe_ssid_convert(result.map(|x| x.as_bytes()))
+}
+
+#[inline]
+fn exec_ssid_cmd<S, I, L>(cmd: S, args: I) -> Result<Option<std::process::Output>>
+where
+    S: AsRef<std::ffi::OsStr>,
+    I: IntoIterator<Item = L>,
+    L: AsRef<OsStr>,
+{
+    let raw = Command::new(&cmd).args(args).output();
+
+    if let Err(ref err) = raw {
+        if err.kind() == ErrorKind::NotFound {
+            return Ok(None);
+        }
+    }
+
+    raw.map(Some).block_error(
+        "net",
+        &format!(
+            "Failed to execute SSID query using {}",
+            cmd.as_ref().to_string_lossy()
+        ),
+    )
+}
+
+#[inline]
+fn maybe_ssid_convert(raw: Option<&[u8]>) -> Result<Option<String>> {
+    if let Some(raw_ssid) = raw {
+        String::from_utf8(raw_ssid.to_vec())
+            .block_error("net", "Non-UTF8 SSID")
+            .map(Some)
+    } else {
+        Ok(None)
     }
 }

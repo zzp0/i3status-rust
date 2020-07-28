@@ -251,7 +251,7 @@ Key | Values | Required | Default
 
 Creates a block that can be updated asynchronously using DBus.
 
-For example, updating the block using the command line tool `qdbus`: `qdbus i3.status.rs /CurrentSoundDevice i3.status.rs.SetStatus headphones`
+For example, updating the block using the command line tool `qdbus`: `qdbus i3.status.rs /CurrentSoundDevice i3.status.rs.SetStatus Headphones music Good`. The first argument is the text content of the block, the second (optional) argument is the icon to use (as found in `icons.rs`; default ""), and the third (optional) argument is the state (one of Idle, Info, Good, Warning, or Critical; default Idle).
 
 ### Examples
 
@@ -424,6 +424,12 @@ block = "ibus"
 "mozc-jp" = "JP"
 "xkb:us::eng" = "EN"
 ```
+
+### Options
+
+Key | Values | Required | Default
+----|--------|----------|--------
+`format` | Format string. Available qualifiers are `"engine"` | No | `"{engine}"`
 
 ## KDEConnect
 
@@ -699,8 +705,10 @@ Key | Values | Required | Default
 Creates a block which displays the upload and download throughput for a network interface. Units are by default in bytes per second (kB/s, MB/s, etc), 
 but the 'use_bits' flag can be set to `true` to convert the units to bps (little b).
 
-`bitrate` for wired devices requires `ethtool` to be installed.
-`ssid` requires one of `iw`, `wpa_cli`, `nm-cli` or `iwctl` to be installed.
+`bitrate` requires either `ethtool` for wired devices or `iw` for wireless devices.  
+`ip` and `ipv6` require `ip`.  
+`ssid` requires one of `iw`, `wpa_cli`, `nm-cli` or `iwctl`.  
+`signal_strength` requires `iw`.
 
 ### Examples
 
@@ -708,11 +716,7 @@ but the 'use_bits' flag can be set to `true` to convert the units to bps (little
 [[block]]
 block = "net"
 device = "wlp2s0"
-ssid = true
-signal_strength = true
-ip = true
-speed_up = false
-graph_up = true
+format = "{ssid} {signal_strength} {ip} {speed_down} {graph_down}"
 interval = 5
 use_bits = false
 ```
@@ -722,22 +726,40 @@ use_bits = false
 Key | Values | Required | Default
 ----|--------|----------|--------
 `device` | Network interface to monitor (name from /sys/class/net) | Yes | `lo` (loopback interface)
-`ssid` | Display network SSID (wireless only). | No | `false`
-`signal_strength` | Display WiFi signal strength (wireless only). | No | `false`
-`bitrate` | Display connection bitrate. | No | `false`
-`ip` | Display connection IP address. | No | `false`
-`ipv6` | Display connection IPv6 address. | No | `false`
-`speed_up` | Display upload speed. | No | `true`
-`speed_down` | Display download speed. | No | `true`
+`format` | Format string. See below for available qualifiers. | No | "{speed_up} {speed_down}" 
 `speed_digits` | Number of digits to use when displaying speeds. | No | `3`
 `speed_min_unit` | Smallest unit to use when displaying speeds. Possible choices: `"B"`, `"K"`, `"M"`, `"G"`, `"T"`.| No | `"K"`
-`graph_up` | Display a bar graph for upload speed. | No | `false`
-`graph_down` | Display a bar graph for download speed. | No | `false`
 `use_bits` | Display speeds in bits instead of bytes. | No | `false`
-`interval` | Update interval, in seconds. | No | `1`
+`interval` | Update interval, in seconds. Note: the update interval for SSID and IP address is fixed at 30 seconds, and bitrate fixed at 10 seconds. | No | `1`
 `hide_missing` | Whether to hide networks that are down/inactive completely. | No | `false`
 `hide_inactive` | Whether to hide networks that are missing. | No | `false`
 
+### Format String
+Placeholder | Description
+------------|------------
+`ssid` | Display network SSID (wireless only).
+`signal_strength` | Display WiFi signal strength (wireless only).
+`bitrate` | Display connection bitrate.
+`ip` | Display connection IP address.
+`ipv6` | Display connection IPv6 address.
+`speed_up` | Display upload speed.
+`speed_down` | Display download speed.
+`graph_up` | Display a bar graph for upload speed.
+`graph_down` | Display a bar graph for download speed.
+
+### Deprecated Options
+
+Key | Values | Required | Default
+----|--------|----------|--------
+`ssid` | Deprecated in favor of `format`. Display network SSID (wireless only). | No | `false`
+`signal_strength` | Deprecated in favor of `format`. Display WiFi signal strength (wireless only). | No | `false`
+`bitrate` | Deprecated in favor of `format`. Display connection bitrate. | No | `false`
+`ip` | Deprecated in favor of `format`. Display connection IP address. | No | `false`
+`ipv6` | Deprecated in favor of `format`. Display connection IPv6 address. | No | `false`
+`speed_up` | Deprecated in favor of `format`. Display upload speed. | No | `true`
+`speed_down` | Deprecated in favor of `format`. Display download speed. | No | `true`
+`graph_up` | Deprecated in favor of `format`. Display a bar graph for upload speed. | No | `false`
+`graph_down` | Deprecated in favor of `format`. Display a bar graph for download speed. | No | `false`
 
 ## NetworkManager
 
@@ -757,8 +779,9 @@ Key | Values | Required | Default
 ----|--------|----------|---------
 `primary_only` | Whether to show only the primary active connection or all active connections | No | `false`
 `max_ssid_width` | Truncation length for SSID | No | `21`
-`device_format` | Device string formatter. See below for available placeholders. | No | `"{icon}{ssid}"`
-`connection_format` | Connection string formatter. See below for available placeholders. | No | `"{devices} {ips}"`
+`ap_format` | Acces point string formatter. See below for available placeholders. | No | `"{ssid}"`
+`device_format` | Device string formatter. See below for available placeholders. | No | `"{icon}{ap} {ips}"`
+`connection_format` | Connection string formatter. See below for available placeholders. | No | `"{devices}"`
 `on_click` | On-click handler | No | `""`
 
 ### AP format string
@@ -767,7 +790,7 @@ Placeholder | Description
 ------------|-------------
 `{ssid}` | The SSID for this AP.
 `{strength}` | The signal strength in percent for this AP.
-`{frequency}` | The frequency of this AP in MHz.
+`{freq}` | The frequency of this AP in MHz.
 
 ### Device format string
 
@@ -1250,6 +1273,8 @@ Key | Value
 ## Xrandr
 
 Creates a block which shows screen information (name, brightness, resolution). With a click you can toggle through your active screens and with wheel up and down you can adjust the selected screens brightness.
+
+NOTE: Some users report issues (e.g. [here](https://github.com/greshake/i3status-rust/issues/274) and [here](https://github.com/greshake/i3status-rust/issues/668) when using this block. The cause is currently unknown, however setting a higher update interval may help.
 
 ### Examples
 
