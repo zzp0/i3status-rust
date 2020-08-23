@@ -692,6 +692,7 @@ Key | Values | Required | Default
 ----|--------|----------|--------
 `player` | Name of the music player. Must be the same name the player is registered with the MediaPlayer2 Interface.  If unset, it will automatically discover the active player.  | Yes | None
 `max_width` | Max width of the block in characters, not including the buttons | No | `21`
+`dynamic_width` | Bool to specify whether the block will change width depending on the text content or remain static always (= `max_width`) | No | `false`
 `marquee` | Bool to specify if a marquee style rotation should be used if the title + artist is longer than max-width | No | `true`
 `marquee_interval` | Marquee interval in seconds. This is the delay between each rotation. | No | `10`
 `marquee_speed` | Marquee speed in seconds. This is the scrolling time used per character. | No | `0.5`
@@ -771,6 +772,8 @@ Creates a block which displays network connection information from NetworkManage
 [[block]]
 block = "networkmanager"
 on_click = "alacritty -e nmtui"
+interface_name_exclude = ["br\\-[0-9a-f]{12}", "docker\\d+"]
+interface_name_include = []
 ```
 
 ### Options
@@ -783,6 +786,8 @@ Key | Values | Required | Default
 `device_format` | Device string formatter. See below for available placeholders. | No | `"{icon}{ap} {ips}"`
 `connection_format` | Connection string formatter. See below for available placeholders. | No | `"{devices}"`
 `on_click` | On-click handler | No | `""`
+`interface_name_exclude` | A list of regex patterns for device interface names to ignore | No | ""
+`interface_name_include` | A list of regex patterns for device interface names to include (only interfaces that match at least one are shown) | No | ""
 
 ### AP format string
 
@@ -798,6 +803,7 @@ Placeholder | Description
 ------------|-------------
 `{icon}` | The icon matching the device type.
 `{typename}` | The name of the device type.
+`{name}` | The name of the device interface.
 `{ap}` | The connected AP if available, formatted with the AP format string.
 `{ips}` | The list of IPs for this device.
 
