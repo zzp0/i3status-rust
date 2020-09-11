@@ -10,6 +10,7 @@
 - [Docker](#docker)
 - [Focused Window](#focused-window)
 - [Github](#github)
+- [Hueshift](#hueshift)
 - [IBus](#ibus)
 - [KDEConnect](#kdeconnect)
 - [Keyboard Layout](#keyboard-layout)
@@ -404,6 +405,36 @@ It requires a Github [personal access token](https://github.com/settings/tokens/
 `{team_mention}` | Total of notification related to thread where your team was mentioned.
 
 For more information about reasons, please see the [API documentation](https://developer.github.com/v3/activity/notifications/#notification-reasons).
+
+## Hueshift
+
+Creates a block which display the current color temperature in Kelvin. When scrolling upon the block the color temperature is changed.
+A left click on the block sets the color temperature to `click_temp` that is by default to `6500K`.
+A right click completely resets the color temperature to its default value (`6500K`).
+
+### Examples
+
+```toml
+[[block]]
+block = "hueshift"
+hue_shifter = "redshift"
+step = 50
+click_temp = 3500
+```
+
+### Options
+
+
+Key | Values | Required | Default
+----|--------|----------|--------
+`step`        | The step color temperature is in/decreased in kelvin                   | No | `100`
+`hue_shifter` | Change color temperature. Available qualifiers are `redshift` or `sct` | No | `"redshift"`
+`max_temp`    | max color temperature                                                  | No | `10000`
+`min_temp`    | min color temperature                                                  | No | `1000`
+`click_temp`  | left click color temperature                                           | No | `6500`
+
+A hard limit is set for the `max_temp` to `10000K` and the same for the `min_temp` which is `1000K`.
+The `step` has a hard limit as well, defined to `500K` to avoid too brutal changes.
 
 ## IBus
 
@@ -906,6 +937,23 @@ format_up_to_date = "system up to date"
 critical_updates_regex = "(linux |linux-lts|linux-zen)"
 ```
 
+pacman only config using warnings with ZFS modules:
+
+```toml
+[[block]]
+block = "pacman"
+interval = 600
+format = "{pacman} updates available"
+format_singular = "{pacman} update available"
+format_up_to_date = "system up to date"
+# If a linux update is availble, but no ZFS package, it won't be possible to
+# actually perform a system upgrade, so we show a warning.
+warning_updates_regex = "(linux |linux-lts|linux-zen)"
+# If ZFS is available, we know that we can and should do an upgrade, so we show 
+# the status as critical.
+critical_updates_regex = "(zfs |zfs-lts)"
+```
+
 pacman and AUR helper config:
 
 ```toml
@@ -928,6 +976,7 @@ Key | Values | Required | Default
 `format` | Format override | No | `"{pacman}"`
 `format_singular` | Format override if exactly one update is available | No | `"{pacman}"`
 `format_up_to_date` | Format override if no updates are available | No | `"{pacman}"`
+`warning_updates_regex` | Display block as warning if updates matching regex are available | No | `None`
 `critical_updates_regex` | Display block as critical if updates matching regex are available | No | `None`
 `aur_command` | AUR command to check available updates, which outputs in the same format as pacman. e.g. `pikaur -Qua` | if `{both}` or `{aur}` are used | `None`
 
