@@ -115,6 +115,10 @@ Key | Values | Required | Default
 `driver` | One of `"sysfs"` or `"upower"`. | No | `"sysfs"`
 `interval` | Update interval, in seconds. Only relevant for `driver = "sysfs"`. | No | `10`
 `format` | A format string. See below for available placeholders. | No | `"{percentage}%"`
+`full_format` | The format string that's used when the battery reaches full state. | No | `"{percentage}%"`
+`missing_format` | The format string that's used when a battery is missing. | No | `"{percentage}%"`
+`allow_missing` | Don't display errors when the battery cannot be found. Only works with the `sysfs` driver. | No | `false`
+`hide_missing` | Completely hide this block, if the battery cannot be found. Only works in combination with `allow_missing`. | No | `false`
 `show` | Deprecated in favour of `format`. Show remaining `"time"`, `"percentage"` or `"both"` | No | `"percentage"`
 `upower` | Deprecated in favour of `device`. When `true`, use the Upower D-Bus driver. | No | `false`
 `info` | Minimum battery level, where state is set to info. | No | `60`
@@ -129,6 +133,7 @@ The `show` option is deprecated, and will be removed in future versions. In the 
 Placeholder | Description
 ------------|-------------
 `{percentage}` | Battery level, in percent.
+`{bar}` | The current battery level in a bar chart.
 `{time}` | Time remaining until (dis)charge is complete.
 `{power}` | Power consumption (in watts) by the battery or from the power supply when charging.
 
@@ -680,6 +685,7 @@ Key | Values | Required | Default
 ## Music
 
 Creates a block to display the current song title and artist in a fixed-width marquee. Also provides buttons for play/pause, previous and next.
+When there is no song playing the block collapses to show just the icon and any configured buttons.
 
 Supports all music players that implement the [MediaPlayer2 Interface](https://specifications.freedesktop.org/mpris-spec/latest/Player_Interface.html). This includes:
 
@@ -732,8 +738,8 @@ Key | Values | Required | Default
 `smart_trim` | When marquee rotation is disabled and the title + artist is longer than max-width, trim from both the artist and the title in proportion to their lengths, to try and show the most information possible. | No | `false`
 `separator` | String to insert between artist and title | No | `" - "`
 `buttons` | Array of control buttons to be displayed. Options are prev (previous title), play (play/pause) and next (next title) | No | `[]`
-`on_collapsed_click` | Shell command to run when the music block is clicked while collapsed. | No | None
-`on_click` | Command to execute when the block is clicked while not collapsed. | No | None
+`on_collapsed_click` | Command to run when the block is clicked while collapsed. | No | None
+`on_click` | Command to run when the block is clicked while not collapsed. | No | None
 
 ## Net
 
@@ -989,7 +995,7 @@ Key | Value
 `{count}` | Number of pacman updates available (**deprecated**: use `{pacman}` instead)
 `{pacman}`| Number of updates available according to `pacman`
 `{aur}` | Number of updates available according to `<aur_command>`
-`{both}` | Cumulative number of updates available according to `pacman` and `<aur_commad>` 
+`{both}` | Cumulative number of updates available according to `pacman` and `<aur_command>` 
 
 
 ## Pomodoro
