@@ -29,6 +29,9 @@ pub struct Custom {
     signal: Option<i32>,
     tx_update_request: Sender<Task>,
     pub json: bool,
+    hide_when_empty: bool,
+    is_empty: bool,
+    shell: String,
 }
 
 #[derive(Deserialize, Debug, Default, Clone)]
@@ -56,6 +59,11 @@ pub struct CustomConfig {
     /// Parse command output if it contains valid bar JSON
     #[serde(default = "CustomConfig::default_json")]
     pub json: bool,
+
+    #[serde(default = "CustomConfig::hide_when_empty")]
+    pub hide_when_empty: bool,
+
+    pub shell: Option<String>,
 }
 
 impl CustomConfig {
@@ -64,6 +72,10 @@ impl CustomConfig {
     }
 
     fn default_json() -> bool {
+        false
+    }
+
+    fn hide_when_empty() -> bool {
         false
     }
 }
@@ -82,6 +94,13 @@ impl ConfigBlock for Custom {
             signal: None,
             tx_update_request: tx,
             json: block_config.json,
+            hide_when_empty: block_config.hide_when_empty,
+            is_empty: true,
+            shell: if let Some(s) = block_config.shell {
+                s
+            } else {
+                env::var("SHELL").unwrap_or_else(|_| "sh".to_owned())
+            },
         };
         custom.output = ButtonWidget::new(config, &custom.id);
 
@@ -133,7 +152,7 @@ impl Block for Custom {
             .or_else(|| self.command.clone())
             .unwrap_or_else(|| "".to_owned());
 
-        let raw_output = Command::new(env::var("SHELL").unwrap_or_else(|_| "sh".to_owned()))
+        let raw_output = Command::new(&self.shell)
             .args(&["-c", &command_str])
             .output()
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
@@ -151,8 +170,10 @@ impl Block for Custom {
             };
             self.output.set_icon(&output.icon);
             self.output.set_state(output.state);
+            self.is_empty = output.text.is_empty();
             self.output.set_text(output.text);
         } else {
+            self.is_empty = raw_output.is_empty();
             self.output.set_text(raw_output);
         }
 
@@ -160,7 +181,11 @@ impl Block for Custom {
     }
 
     fn view(&self) -> Vec<&dyn I3BarWidget> {
-        vec![&self.output]
+        if self.is_empty && self.hide_when_empty {
+            vec![]
+        } else {
+            vec![&self.output]
+        }
     }
 
     fn signal(&mut self, signal: i32) -> Result<()> {
@@ -187,7 +212,7 @@ impl Block for Custom {
         let mut update = false;
 
         if let Some(ref on_click) = self.on_click {
-            spawn_child_async("sh", &["-c", on_click]).ok();
+            spawn_child_async(&self.shell, &["-c", on_click]).ok();
             update = true;
         }
 

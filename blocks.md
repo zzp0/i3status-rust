@@ -162,6 +162,7 @@ Key | Values | Required | Default
 ----|--------|----------|--------
 `mac` | MAC address of the Bluetooth device. | Yes | None
 `label` | Text label to display next to the icon. | No | None
+`hide_disconnected` | Hides the block when the device is disconnected | No | false
 
 
 ## CPU Utilization
@@ -257,12 +258,13 @@ Note that `command` and `cycle` are mutually exclusive.
 Key | Values | Required | Default
 ----|--------|----------|--------
 `command` | Shell command to execute & display. | No | None
-`on_click` | Command to execute when the button is clicked. The command will be passed to whatever is specified in your `$SHELL` variable and - if not set - fallback to `sh`. | No | None
+`on_click` | Command to execute when the button is clicked. | No | None
 `cycle` | Commands to execute and change when the button is clicked. | No | None
 `interval` | Update interval, in seconds (or `"once"` to update only once). | No | `10`
 `json` | Use JSON from command output to format the block. If the JSON is not valid, the block will error out. | No | `false`
 `signal` | Signal value that causes an update for this block with 0 corresponding to `-SIGRTMIN+0` and the largest value being `-SIGRTMAX` | No | None
-
+`hide_when_empty` | Hides the block when the command output (or json text field) is empty | No | false
+`shell` | Specify the shell to use when running commands. | No | `$SHELL` if set, otherwise fallback to `sh`
 
 
 ## Custom DBus
@@ -783,8 +785,8 @@ Key | Values | Required | Default
 `speed_min_unit` | Smallest unit to use when displaying speeds. Possible choices: `"B"`, `"K"`, `"M"`, `"G"`, `"T"`.| No | `"K"`
 `use_bits` | Display speeds in bits instead of bytes. | No | `false`
 `interval` | Update interval, in seconds. Note: the update interval for SSID and IP address is fixed at 30 seconds, and bitrate fixed at 10 seconds. | No | `1`
-`hide_missing` | Whether to hide networks that are down/inactive completely. | No | `false`
-`hide_inactive` | Whether to hide networks that are missing. | No | `false`
+`hide_missing` | Whether to hide networks that are missing. | No | `false`
+`hide_inactive` | Whether to hide networks that are down/inactive completely. | No | `false`
 
 ### Format String
 Placeholder | Description
@@ -900,13 +902,15 @@ Key | Values | Required | Default
 
 ## Nvidia Gpu
 
-Proprietary nvidia driver required.
+Creates a block which can display the name, utilization, temperature, memory usage, fan speed and clock speed of your NVidia GPU.
 
-Creates a block which displays the Nvidia GPU utilization, temperature, used and total memory, fan speed, gpu clocks. You can set gpu label, that displayed by default.
+By default the name provided by `nvidia-smi` will be shown. If `label` is set then clicking the left mouse button on the "name" part of the block will alternate it between showing the default name or `label`.
 
-Clicking the left button on the icon changes the output of the label to the output of the gpu name. Same with memory: used/total.
+By default `show_temperature` shows the used memory. Clicking the left mouse on the "temperature" part of the block will alternate it between showing used or total available memory.
 
-Clicking the left button on the fans turns on the mode of changing the speed of the fans using the wheel. Press again to turn off the mode. For this opportunity you need nvidia-settings!
+When using `show_fan_speed`, clicking the left mouse button on the "fan speed" part of the block will cause it to enter into a fan speed setting mode. In this mode you can scroll the mouse wheel over the block to change the fan speeds, and left click to exit the mode.
+
+Requires `nvidia-smi` for displaying info and `nvidia_settings` for setting fan speed.
 
 ### Examples
 
@@ -1351,7 +1355,7 @@ Key | Value
 
 ## Xrandr
 
-Creates a block which shows screen information (name, brightness, resolution). With a click you can toggle through your active screens and with wheel up and down you can adjust the selected screens brightness.
+Creates a block which shows screen information (name, brightness, resolution). With a click you can toggle through your active screens and with wheel up and down you can adjust the selected screens brightness. Regarding brightness control, xrandr changes the brightness of the display using gamma rather than changing the brightness in hardware, so if that is not desirable then consider using the `backlight` block instead.
 
 NOTE: Some users report issues (e.g. [here](https://github.com/greshake/i3status-rust/issues/274) and [here](https://github.com/greshake/i3status-rust/issues/668) when using this block. The cause is currently unknown, however setting a higher update interval may help.
 
