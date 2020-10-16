@@ -33,7 +33,7 @@ lazy_static! {
     static ref ETHTOOL_SPEED_REGEX: Regex = Regex::new("Speed: (\\d+\\w\\w/s)").unwrap();
     static ref IW_SSID_REGEX: Regex = Regex::new("SSID: (.*)").unwrap();
     static ref WPA_SSID_REGEX: Regex = Regex::new("ssid=([[:alnum:]]+)").unwrap();
-    static ref IWCTL_SSID_REGEX: Regex = Regex::new("Connected network ([[:alnum:]]+)").unwrap();
+    static ref IWCTL_SSID_REGEX: Regex = Regex::new("Connected network\\s+([[:alnum:]]+)").unwrap();
     static ref IW_BITRATE_REGEX: Regex =
         Regex::new("tx bitrate: (\\d+(?:\\.?\\d+) [[:alpha:]]+/s)").unwrap();
     static ref IW_SIGNAL_REGEX: Regex = Regex::new("signal: (-?\\d+) dBm").unwrap();
@@ -166,7 +166,13 @@ impl NetworkDevice {
     /// Queries the wireless SSID of this device, if it is connected to one.
     pub fn ssid(&self) -> Result<Option<String>> {
         let up = self.is_up()?;
-        if !self.wireless || !up {
+        if !up {
+            return Ok(None);
+        }
+
+        // TODO: probably best to move this to where the block is
+        // first instantiated
+        if !self.wireless {
             return Err(BlockError(
                 "net".to_string(),
                 "SSIDs are only available for connected wireless devices.".to_string(),
@@ -178,7 +184,13 @@ impl NetworkDevice {
 
     fn absolute_signal_strength(&self) -> Result<Option<i32>> {
         let up = self.is_up()?;
-        if !self.wireless || !up {
+        if !up {
+            return Ok(None);
+        }
+
+        // TODO: probably best to move this to where the block is
+        // first instantiated
+        if !self.wireless {
             return Err(BlockError(
                 "net".to_string(),
                 "Signal strength is only available for connected wireless devices.".to_string(),
@@ -283,11 +295,9 @@ impl NetworkDevice {
     /// Queries the bitrate of this device
     pub fn bitrate(&self) -> Result<Option<String>> {
         let up = self.is_up()?;
+        // Doesn't really make sense to crash the bar here
         if !up {
-            return Err(BlockError(
-                "net".to_string(),
-                "Bitrate is only available for connected devices.".to_string(),
-            ));
+            return Ok(None);
         }
         if self.wireless {
             let bitrate_output = Command::new("iw")
@@ -841,7 +851,7 @@ impl Block for Net {
         let is_up = self.device.is_up()?;
         if !exists || !is_up {
             self.active = false;
-            self.network.set_text(" ×".to_string());
+            self.network.set_text("×".to_string());
             if let Some(ref mut tx) = self.output_tx {
                 *tx = "×".to_string();
             };
@@ -876,7 +886,8 @@ impl Block for Net {
                 .icons
                 .get("net_up")
                 .cloned()
-                .unwrap_or_else(|| "".to_string()),
+                .unwrap_or_else(|| "".to_string())
+                .trim_start(),
             self.output_tx.as_ref().unwrap_or(&empty_string)
         );
         let s_dn = format!(
@@ -885,7 +896,8 @@ impl Block for Net {
                 .icons
                 .get("net_down")
                 .cloned()
-                .unwrap_or_else(|| "".to_string()),
+                .unwrap_or_else(|| "".to_string())
+                .trim_start(),
             self.output_rx.as_ref().unwrap_or(&empty_string)
         );
 
@@ -1048,7 +1060,7 @@ fn get_nmcli_ssid(dev: &NetworkDevice) -> Result<Option<String>> {
 ///     - `iwctl` failed to produce a valid UTF-8 SSID
 /// Returns Ok(None) if `iwctl` failed to produce a SSID.
 fn get_iwctl_ssid(dev: &NetworkDevice) -> Result<Option<String>> {
-    let raw = exec_ssid_cmd("iwctl", &["station", "station", &dev.device, "show"])?;
+    let raw = exec_ssid_cmd("iwctl", &["station", &dev.device, "show"])?;
 
     if raw.is_none() {
         return Ok(None);
@@ -1058,7 +1070,8 @@ fn get_iwctl_ssid(dev: &NetworkDevice) -> Result<Option<String>> {
     let result = raw
         .stdout
         .split(|c| *c == b'\n')
-        .filter_map(|x| IWCTL_SSID_REGEX.find(x))
+        .filter_map(|x| IWCTL_SSID_REGEX.captures_iter(x).next())
+        .filter_map(|x| x.get(1))
         .next();
 
     maybe_ssid_convert(result.map(|x| x.as_bytes()))
