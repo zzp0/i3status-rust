@@ -265,7 +265,8 @@ impl NetworkDevice {
             .flat_map(|dev| &dev.addr_info)
             .filter_map(|addr| addr.local.clone())
             .next();
-        ip.block_error("net", "Malformed JSON.").map(Some)
+        ip.block_error("net", &format!("Malformed JSON: {}", output))
+            .map(Some)
     }
 
     /// Queries the inet IPv6 of this device (using `ip`).
@@ -289,7 +290,8 @@ impl NetworkDevice {
             .flat_map(|dev| &dev.addr_info)
             .filter_map(|addr| addr.local.clone())
             .next();
-        ip.block_error("net", "Malformed JSON.").map(Some)
+        ip.block_error("net", &format!("Malformed JSON: {}", output))
+            .map(Some)
     }
 
     /// Queries the bitrate of this device
@@ -888,8 +890,7 @@ impl Block for Net {
                 .icons
                 .get("net_up")
                 .cloned()
-                .unwrap_or_else(|| "".to_string())
-                .trim_start(),
+                .unwrap_or_else(|| "".to_string()),
             self.output_tx.as_ref().unwrap_or(&empty_string)
         );
         let s_dn = format!(
@@ -898,8 +899,7 @@ impl Block for Net {
                 .icons
                 .get("net_down")
                 .cloned()
-                .unwrap_or_else(|| "".to_string())
-                .trim_start(),
+                .unwrap_or_else(|| "".to_string()),
             self.output_rx.as_ref().unwrap_or(&empty_string)
         );
 
