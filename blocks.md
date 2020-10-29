@@ -66,6 +66,11 @@ Key | Values | Required | Default
 ----|--------|----------|--------
 `device` | The `/sys/class/backlight` device to read brightness information from. | No | Default device
 `step_width` | The brightness increment to use when scrolling, in percent. | No | `5`
+`root_scaling` | Scaling exponent reciprocal (ie. root). | No | `1.0`
+
+Some devices expose raw values that are best handled with nonlinear scaling. The human perception of lightness is close to the cube root of relative luminance, so settings for `root_scaling` between 2.4 and 3.0 are worth trying. For devices with few discrete steps this should be 1.0 (linear).
+
+More information: <https://en.wikipedia.org/wiki/Lightness>
 
 ### Setting Brightness with the Mouse Wheel
 
@@ -790,8 +795,8 @@ Key | Values | Required | Default
 `speed_min_unit` | Smallest unit to use when displaying speeds. Possible choices: `"B"`, `"K"`, `"M"`, `"G"`, `"T"`.| No | `"K"`
 `use_bits` | Display speeds in bits instead of bytes. | No | `false`
 `interval` | Update interval, in seconds. Note: the update interval for SSID and IP address is fixed at 30 seconds, and bitrate fixed at 10 seconds. | No | `1`
-`hide_missing` | Whether to hide networks that are missing. | No | `false`
-`hide_inactive` | Whether to hide networks that are down/inactive completely. | No | `false`
+`hide_missing` | Whether to hide interfaces that don't exist on the system. | No | `false`
+`hide_inactive` | Whether to hide interfaces that are not connected (or missing). | No | `false`
 
 ### Format String
 Placeholder | Description
@@ -1188,10 +1193,11 @@ Key | Values | Required | Default
 ----|--------|----------|--------
 `interval` | Update interval, in seconds. | No | `5`
 `collapsed` | Whether the block will be collapsed by default. | No | `true`
-`good` | Maximum temperature to set state to good. | No | `20`
-`idle` | Maximum temperature to set state to idle. | No | `45`
-`info` | Maximum temperature to set state to info. | No | `60`
-`warning` | Maximum temperature to set state to warning. Beyond this temperature, state is set to critical. | No | `80`
+`scale` | Either `celsius` or `fahrenheit` | No | `celsius`
+`good` | Maximum temperature to set state to good. | No | `20` °C (`68` °F)
+`idle` | Maximum temperature to set state to idle. | No | `45` °C (`113` °F)
+`info` | Maximum temperature to set state to info. | No | `60` °C (`140` °F)
+`warning` | Maximum temperature to set state to warning. Beyond this temperature, state is set to critical. | No | `80` °C (`176` °F)
 `chip` | Narrows the results to a given chip name. `*` may be used as a wildcard. | No | None
 `inputs` | Narrows the results to individual inputs reported by each chip. | No | None
 `format` | Format string. | No | `"{average}° avg, {max}° max"`
